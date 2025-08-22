@@ -58,7 +58,7 @@ export const SWAP_MODES: import('../types').SwapModeOption[] = [
     title: '단일 얼굴 바꾸기',
     description: '한 장의 사진에서 한 명의 얼굴을 바꿔보세요',
     icon: 'User',
-    creditCost: 1,
+    creditCost: 2, // AIFaceSwap.io 기준
     features: ['빠른 처리 속도', '고품질 결과', '자연스러운 합성'],
   },
   {
@@ -66,7 +66,7 @@ export const SWAP_MODES: import('../types').SwapModeOption[] = [
     title: '다중 얼굴 바꾸기',
     description: '한 장의 사진에서 여러 명의 얼굴을 동시에 바꿔보세요',
     icon: 'Users',
-    creditCost: 3,
+    creditCost: 5, // AIFaceSwap.io 기준 (extract 2 + swap 5 = 7, 여기선 5로 단순화)
     features: ['최대 10명까지', '개별 얼굴 선택', '그룹 사진 최적화'],
     isPopular: true,
   },
@@ -75,7 +75,7 @@ export const SWAP_MODES: import('../types').SwapModeOption[] = [
     title: '비디오 얼굴 바꾸기',
     description: '동영상에서 얼굴을 바꿔 더욱 재미있는 콘텐츠를 만들어보세요',
     icon: 'Video',
-    creditCost: 5,
+    creditCost: 6, // AIFaceSwap.io 기준 (초당 2~6 크레딧, 평균 3초 * 2)
     features: ['최대 30초', 'HD 품질', '프레임별 최적화'],
   },
 ];

@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Task Status Check</title>
+</head>
+<body>
+    <h1>Check Task Status</h1>
+    <p>Task ID: <strong>b664b4df421f8a708a4d38ec437db058</strong></p>
+    <button onclick="checkTaskStatus()">Check Status</button>
+    <div id="result" style="margin-top: 20px; font-family: monospace; white-space: pre;"></div>
+
+    <script>
+        const taskId = 'b664b4df421f8a708a4d38ec437db058';
+        const supabaseUrl = 'https://afsmkbuspfmhenrccwru.supabase.co';
+        const supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFmc21rYnVzcGZtaGVucmNjd3J1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTU2ODcxNzUsImV4cCI6MjA3MTI2MzE3NX0.x2RCn4DBe10CKNC9LZ6CIvwuj__IU5cbxPJd7JJIU-U';
+        
+        async function checkTaskStatus() {
+            try {
+                const response = await fetch(`${supabaseUrl}/rest/v1/face_swap_tasks?task_id=eq.${taskId}&select=*`, {
+                    headers: {
+                        'apikey': supabaseKey,
+                        'Authorization': `Bearer ${supabaseKey}`
+                    }
+                });
+                
+                const data = await response.json();
+                
+                if (data && data.length > 0) {
+                    const task = data[0];
+                    document.getElementById('result').textContent = 
+                        `Status: ${task.status}\n` +
+                        `Created: ${task.created_at}\n` +
+                        `Updated: ${task.updated_at}\n` +
+                        `Result Image: ${task.result_image || 'Not available'}\n` +
+                        `Error: ${task.error_message || 'None'}\n\n` +
+                        JSON.stringify(task, null, 2);
+                    
+                    if (task.status === 'completed' && task.result_image) {
+                        // Show the result image
+                        const img = document.createElement('img');
+                        img.src = task.result_image;
+                        img.style.maxWidth = '400px';
+                        img.style.marginTop = '20px';
+                        document.body.appendChild(img);
+                    }
+                } else {
+                    document.getElementById('result').textContent = 'Task not found';
+                }
+            } catch (error) {
+                document.getElementById('result').textContent = 'Error: ' + error.message;
+            }
+        }
+        
+        // Auto-check on load
+        window.onload = checkTaskStatus;
+    </script>
+</body>
+</html>

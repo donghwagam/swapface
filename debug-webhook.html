@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Webhook Debug</title>
+</head>
+<body>
+    <h1>Debug Webhook System</h1>
+    <button onclick="checkTask()">Check Task Status</button>
+    <button onclick="testWebhook()">Test Webhook</button>
+    <button onclick="checkAllTasks()">View All Tasks</button>
+    <div id="result" style="margin-top: 20px; font-family: monospace; white-space: pre;"></div>
+
+    <script>
+        const supabaseUrl = 'https://afsmkbuspfmhenrccwru.supabase.co';
+        const supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFmc21rYnVzcGZtaGVucmNjd3J1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTU2ODcxNzUsImV4cCI6MjA3MTI2MzE3NX0.x2RCn4DBe10CKNC9LZ6CIvwuj__IU5cbxPJd7JJIU-U';
+        
+        const taskId = 'acd78cab07042223869be61af4941099';
+        
+        async function checkTask() {
+            try {
+                const response = await fetch(`${supabaseUrl}/rest/v1/face_swap_tasks?task_id=eq.${taskId}&select=*`, {
+                    headers: {
+                        'apikey': supabaseKey,
+                        'Authorization': `Bearer ${supabaseKey}`
+                    }
+                });
+                
+                const data = await response.json();
+                document.getElementById('result').textContent = 'Task Status:\n' + JSON.stringify(data, null, 2);
+            } catch (error) {
+                document.getElementById('result').textContent = 'Error: ' + error.message;
+            }
+        }
+        
+        async function testWebhook() {
+            try {
+                // Test webhook endpoint directly
+                const response = await fetch(`${supabaseUrl}/functions/v1/aifaceswap-webhook`, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${supabaseKey}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        success: 1,
+                        task_id: taskId,
+                        result_image: 'https://example.com/test-result.jpg'
+                    })
+                });
+                
+                const result = await response.json();
+                document.getElementById('result').textContent = 'Webhook Test:\n' + JSON.stringify(result, null, 2);
+            } catch (error) {
+                document.getElementById('result').textContent = 'Webhook Error: ' + error.message;
+            }
+        }
+        
+        async function checkAllTasks() {
+            try {
+                const response = await fetch(`${supabaseUrl}/rest/v1/face_swap_tasks?select=*&order=created_at.desc&limit=5`, {
+                    headers: {
+                        'apikey': supabaseKey,
+                        'Authorization': `Bearer ${supabaseKey}`
+                    }
+                });
+                
+                const data = await response.json();
+                document.getElementById('result').textContent = 'Recent Tasks:\n' + JSON.stringify(data, null, 2);
+            } catch (error) {
+                document.getElementById('result').textContent = 'Error: ' + error.message;
+            }
+        }
+    </script>
+</body>
+</html>

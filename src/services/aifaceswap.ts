@@ -3,7 +3,7 @@
  * API Documentation: https://aifaceswap.io/api-doc/
  */
 
-import { callAIFaceSwapAPI, uploadImageToSupabase } from './supabase';
+import { callAIFaceSwapAPI, uploadImageToSupabase, supabase } from './supabase';
 
 export interface FaceSwapRequest {
   source_image: string;
@@ -109,6 +109,48 @@ class AIFaceSwapService {
   }
 
   /**
+   * Extract faces from image file directly using Supabase SDK
+   */
+  async extractFacesFromFile(file: File): Promise<ExtractFaceResponse> {
+    try {
+      console.log('🔄 Uploading file for face detection:', {
+        name: file.name,
+        size: file.size,
+        type: file.type
+      });
+      
+      // Use Supabase SDK to call Edge Function with file upload
+      const formData = new FormData();
+      formData.append('img', file);
+      
+      const { data, error } = await supabase.functions.invoke('faceswap-start/extract_face', {
+        body: formData
+      });
+      
+      if (error) {
+        console.error('❌ Supabase function error:', error);
+        throw new Error(`Extract faces failed: ${error.message}`);
+      }
+      
+      if (!data || (data.code && data.code !== 200)) {
+        console.error('❌ Extract faces API error:', data);
+        throw new Error(`Extract faces failed: ${data?.message || 'unknown error'}`);
+      }
+      
+      console.log('✅ Face detection successful:', {
+        facesFound: data?.data?.faces?.length || 0,
+        response: data
+      });
+      
+      return data;
+      
+    } catch (error) {
+      console.error('❌ Extract faces from file failed:', error);
+      throw error;
+    }
+  }
+
+  /**
    * Multiple face swap
    */
   async multiFaceSwap(request: MultiFaceSwapRequest): Promise<FaceSwapResponse> {
@@ -130,24 +172,19 @@ class AIFaceSwapService {
   }
 
   /**
-   * Upload image file - for now using demo URLs to test API connection
-   * TODO: Implement proper image upload after Storage permissions are fixed
+   * Upload image file to Supabase Storage and get public URL
    */
   async uploadImage(file: File): Promise<string> {
-    console.log('Creating demo public URL for:', file.name);
+    console.log('🔄 Uploading image to Supabase Storage:', file.name);
     
-    // For testing API connection, use known working image URLs
-    const demoImages = [
-      'https://images.pexels.com/photos/1559486/pexels-photo-1559486.jpeg?auto=compress&cs=tinysrgb&w=400',
-      'https://images.pexels.com/photos/1382731/pexels-photo-1382731.jpeg?auto=compress&cs=tinysrgb&w=400',
-      'https://images.pexels.com/photos/1130626/pexels-photo-1130626.jpeg?auto=compress&cs=tinysrgb&w=400',
-      'https://images.pexels.com/photos/774909/pexels-photo-774909.jpeg?auto=compress&cs=tinysrgb&w=400'
-    ];
-    
-    const randomUrl = demoImages[Math.floor(Math.random() * demoImages.length)];
-    console.log('✅ Using demo image URL:', randomUrl);
-    
-    return randomUrl;
+    try {
+      const publicUrl = await uploadImageToSupabase(file);
+      console.log('✅ Image uploaded successfully:', publicUrl);
+      return publicUrl;
+    } catch (error) {
+      console.error('❌ Image upload failed:', error);
+      throw new Error(`Image upload failed: ${error}`);
+    }
   }
 
   /**

@@ -1,0 +1,153 @@
+import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+}
+
+interface WebhookPayload {
+  success: number; // 1 for success, 0 for failure
+  type: number; // 1 for single person, 2 for multiple person
+  task_id: string;
+  result_image?: string; // URL of the result image (only present on success)
+}
+
+serve(async (req) => {
+  console.log('=== AIFaceSwap Webhook Received ===')
+  console.log('Method:', req.method)
+  console.log('URL:', req.url)
+  console.log('Headers:', Object.fromEntries(req.headers.entries()))
+  
+  // Handle CORS preflight requests
+  if (req.method === 'OPTIONS') {
+    return new Response('ok', { headers: corsHeaders })
+  }
+
+  // Only accept POST requests
+  if (req.method !== 'POST') {
+    console.log('❌ Method not allowed:', req.method)
+    return new Response('Method not allowed', { 
+      status: 405, 
+      headers: corsHeaders 
+    })
+  }
+
+  try {
+    // Initialize Supabase client
+    const supabaseUrl = Deno.env.get('SUPABASE_URL')!
+    const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
+    
+    const supabase = createClient(supabaseUrl, supabaseServiceKey)
+
+    // Parse webhook payload
+    const rawBody = await req.text()
+    console.log('Raw webhook body:', rawBody)
+    
+    let webhookData: WebhookPayload
+    try {
+      webhookData = JSON.parse(rawBody)
+      console.log('Parsed webhook payload:', JSON.stringify(webhookData, null, 2))
+    } catch (parseError) {
+      console.error('❌ Failed to parse webhook JSON:', parseError)
+      console.log('Raw body was:', rawBody)
+      return new Response('Invalid JSON payload', { 
+        status: 400, 
+        headers: corsHeaders 
+      })
+    }
+
+    const { success, task_id, result_image } = webhookData
+
+    // Validate required fields
+    if (!task_id) {
+      console.error('Missing task_id in webhook payload')
+      return new Response('Missing task_id', { 
+        status: 400, 
+        headers: corsHeaders 
+      })
+    }
+
+    // Update task in database
+    let updateData: any = {
+      updated_at: new Date().toISOString()
+    }
+
+    if (success === 1) {
+      // Success case
+      if (!result_image) {
+        console.error(`Task ${task_id} marked as success but no result_image provided`)
+        updateData.status = 'failed'
+        updateData.error_message = 'Success response but no result image'
+      } else {
+        updateData.status = 'completed'
+        updateData.result_image = result_image
+        console.log(`✅ Task ${task_id} completed successfully with result: ${result_image}`)
+      }
+    } else {
+      // Failure case
+      updateData.status = 'failed'
+      updateData.error_message = 'Task processing failed on AIFaceSwap.io'
+      console.log(`❌ Task ${task_id} failed`)
+    }
+
+    // Update the task in database
+    const { data, error: dbError } = await supabase
+      .from('face_swap_tasks')
+      .update(updateData)
+      .eq('task_id', task_id)
+      .select()
+
+    if (dbError) {
+      console.error('Database update error:', dbError)
+      return new Response(
+        JSON.stringify({ error: 'Database update failed', details: dbError.message }),
+        { 
+          status: 500, 
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
+        }
+      )
+    }
+
+    if (!data || data.length === 0) {
+      console.warn(`Task ${task_id} not found in database`)
+      return new Response(
+        JSON.stringify({ error: 'Task not found', task_id }),
+        { 
+          status: 404, 
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
+        }
+      )
+    }
+
+    console.log('Database updated successfully:', data[0])
+
+    // Return success response to AIFaceSwap.io
+    return new Response(
+      JSON.stringify({ 
+        success: true, 
+        message: 'Webhook processed successfully',
+        task_id,
+        updated_task: data[0]
+      }),
+      {
+        status: 200,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      }
+    )
+
+  } catch (error) {
+    console.error('Webhook processing error:', error)
+    
+    return new Response(
+      JSON.stringify({ 
+        error: 'Webhook processing failed', 
+        details: error.message 
+      }),
+      { 
+        status: 500, 
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
+      }
+    )
+  }
+})

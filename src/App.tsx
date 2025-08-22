@@ -6,6 +6,7 @@ import { FloatingHelp } from './components/FloatingHelp';
 import { SwapModeSelector } from './components/SwapModeSelector';
 import { HeroSection } from './components/HeroSection';
 import { SingleFaceSwap } from './components/SingleFaceSwap';
+import { SingleFaceSwapImproved } from './components/SingleFaceSwapImproved';
 import { MultiFaceSwap } from './components/MultiFaceSwap';
 import { VideoFaceSwap } from './components/VideoFaceSwap';
 import { CreditSystem } from './components/CreditSystem';
@@ -13,6 +14,7 @@ import { HistoryPage } from './components/HistoryPage';
 import { GuidePage } from './components/GuidePage';
 import { FaqPage } from './components/FaqPage';
 import { useUser } from './hooks/useUser';
+import { createStorageBucket } from './services/supabase';
 import type { SwapResult, SwapMode, MultiFaceSwapResult, VideoSwapResult } from './types';
 
 type AppView = 'home' | 'mode-select' | 'single' | 'multi' | 'video' | 'credits' | 'history' | 'guide' | 'faq';
@@ -23,6 +25,13 @@ type AppView = 'home' | 'mode-select' | 'single' | 'multi' | 'video' | 'credits'
 function App() {
   const [currentView, setCurrentView] = React.useState<AppView>('home');
   const { user, history, deductCredit, addCredits, addToHistory, canPerformSwap, getSwapCost } = useUser();
+
+  // Storage bucket already created manually via SQL
+  // React.useEffect(() => {
+  //   createStorageBucket().catch(error => {
+  //     console.warn('Storage bucket initialization:', error);
+  //   });
+  // }, []);
 
   const handleModeSelect = (): void => {
     setCurrentView('mode-select');
@@ -76,7 +85,7 @@ function App() {
         );
       case 'single':
         return (
-          <SingleFaceSwap
+          <SingleFaceSwapImproved
             user={user}
             onBack={handleBackToHome}
             onSwapComplete={handleSwapComplete}
