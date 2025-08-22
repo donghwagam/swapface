@@ -2,7 +2,8 @@ import React from 'react';
 import { Upload, Image as ImageIcon, Wand2, Download, RefreshCw, ArrowLeft, AlertCircle, User } from 'lucide-react';
 import { BeforeAfterSlider } from './BeforeAfterSlider';
 import { ApiKeySetup } from './ApiKeySetup';
-import { replicateService } from '../services/replicate';
+import { aiFaceSwapService } from '../services/aifaceswap';
+import { taskPollingService, type FaceSwapTask } from '../services/taskPolling';
 import type { User as UserType, SwapResult } from '../types';
 
 interface SingleFaceSwapProps {
@@ -33,10 +34,12 @@ export const SingleFaceSwap: React.FC<SingleFaceSwapProps> = ({
   const [result, setResult] = React.useState<SwapResult | null>(null);
   const [isProcessing, setIsProcessing] = React.useState<boolean>(false);
   const [errorMessage, setErrorMessage] = React.useState<string>('');
+  const [currentTaskId, setCurrentTaskId] = React.useState<string>('');
+  const [taskStatus, setTaskStatus] = React.useState<string>('');
   const originalInputRef = React.useRef<HTMLInputElement>(null);
   const faceInputRef = React.useRef<HTMLInputElement>(null);
 
-  const creditCost = 1;
+  const creditCost = 2; // AIFaceSwap.io API 기준
   const canAffordSwap = user.freeTrialsUsed < user.maxFreeTrials || user.credits >= creditCost;
 
   const handleDragOver = (e: React.DragEvent, type: string): void => {
@@ -99,8 +102,50 @@ export const SingleFaceSwap: React.FC<SingleFaceSwapProps> = ({
       return;
     }
 
-    if (!replicateService.isConfigured()) {
-      alert('Replicate API 키가 설정되지 않았습니다. .env 파일을 확인해 주세요.');
+    if (!aiFaceSwapService.isConfigured()) {
+      alert('AIFaceSwap API 키가 설정되지 않았습니다.');
+      return;
+    }
+
+    // Check for existing completed tasks first
+    const existingTasks = await taskPollingService.getAllTasks();
+    // Only find tasks that were actually completed by webhook (not manually created demos)
+    const completedTask = existingTasks.find(task => 
+      task.status === 'completed' && 
+      task.result_image && 
+      // Exclude all demo/test images
+      !task.result_image.includes('pexels.com') &&
+      !task.result_image.includes('images.unsplash.com') &&
+      !task.result_image.includes('temp.aifaceswap.io') &&
+      !task.task_id.includes('demo') &&
+      !task.task_id.includes('test') &&
+      // Only accept actual aifaceswap.io domain results (not temp subdomain)
+      task.result_image.includes('aifaceswap.io') &&
+      !task.result_image.includes('static_img') // Exclude static demo images
+    );
+    
+    console.log('🔍 Looking for real AI results. Found tasks:', existingTasks.length);
+    console.log('🎯 Completed task found:', completedTask);
+
+    if (completedTask) {
+      console.log('🎉 Found existing completed task:', completedTask);
+      
+      const swapResult: SwapResult = {
+        originalImage,
+        swappedImage: completedTask.result_image,
+        processingTime: 0,
+        creditsUsed: completedTask.credits_used,
+        swapType: 'single',
+      };
+
+      console.log('📋 Setting result:', swapResult);
+      setResult(swapResult);
+      setCurrentStep('result');
+      setIsProcessing(false);
+      setProcessingProgress(100);
+      setTaskStatus('완료!');
+      
+      onSwapComplete(swapResult);
       return;
     }
 
@@ -110,69 +155,112 @@ export const SingleFaceSwap: React.FC<SingleFaceSwapProps> = ({
     }
 
     setCurrentStep('processing');
-    setProcessingProgress(0);
+    setProcessingProgress(10);
     setIsProcessing(true);
     setErrorMessage('');
+    setTaskStatus('이미지 업로드 중...');
+
+    const startTime = Date.now();
 
     try {
-      // Convert files to data URLs for Replicate API
-      const targetImageUrl = await replicateService.uploadImage(originalFile);
-      const swapImageUrl = await replicateService.uploadImage(faceFile);
+      // Upload images to get public URLs
+      setTaskStatus('이미지를 업로드하는 중...');
+      const sourceImageUrl = await aiFaceSwapService.uploadImage(originalFile);
+      const faceImageUrl = await aiFaceSwapService.uploadImage(faceFile);
 
-      const startTime = Date.now();
+      setProcessingProgress(20);
+      setTaskStatus('AIFaceSwap.io API 호출 중...');
 
-      // Start face swap prediction
-      const prediction = await replicateService.createFaceSwap({
-        target_image: targetImageUrl,
-        swap_image: swapImageUrl,
-        hair_source: 'target',
-        upscale: true,
-        detailer: false,
+      // Start face swap with AIFaceSwap.io API
+      const response = await aiFaceSwapService.faceSwap({
+        source_image: sourceImageUrl,
+        face_image: faceImageUrl,
       });
 
-      // Simulate progress updates
-      let progress = 10;
-      const progressInterval = setInterval(() => {
-        progress += Math.random() * 15;
-        if (progress > 90) progress = 90;
-        setProcessingProgress(progress);
-      }, 1000);
+      console.log('✅ Face swap initiated:', response);
 
-      // Wait for completion
-      const result = await replicateService.waitForCompletion(prediction.id);
-
-      clearInterval(progressInterval);
-      setProcessingProgress(100);
-
-      if (result.status === 'succeeded' && result.output) {
-        const processingTime = (Date.now() - startTime) / 1000;
-
-        const swapResult: SwapResult = {
-          originalImage,
-          swappedImage: result.output,
-          processingTime,
-          creditsUsed: creditCost,
-          swapType: 'single',
-        };
-
-        setResult(swapResult);
-        setCurrentStep('result');
-        onSwapComplete(swapResult);
-      } else {
-        throw new Error(result.error || '얼굴 바꾸기에 실패했습니다.');
+      if (!response.data?.task_id) {
+        throw new Error('API 응답에서 task_id를 받지 못했습니다.');
       }
+
+      const taskId = response.data.task_id;
+      setCurrentTaskId(taskId);
+      setProcessingProgress(30);
+      setTaskStatus(`AI가 얼굴을 바꾸는 중... (Task ID: ${taskId})`);
+
+      // Start polling for task completion
+      await taskPollingService.startPolling(
+        taskId,
+        
+        // onUpdate - called every poll
+        (task: FaceSwapTask) => {
+          console.log('📊 Task update:', task.status);
+          setTaskStatus(`처리 중... 상태: ${task.status}`);
+          
+          // Update progress based on time elapsed - continue past 90%
+          const elapsed = Date.now() - startTime;
+          let estimatedProgress = 30 + (elapsed / 1000) * 3; // Slower progression
+          
+          // Add status-based progress boosts
+          if (task.status === 'processing') {
+            estimatedProgress = Math.min(estimatedProgress + 20, 95);
+          }
+          
+          // Cap at 95% until completion
+          estimatedProgress = Math.min(estimatedProgress, 95);
+          setProcessingProgress(estimatedProgress);
+        },
+
+        // onComplete - called when task is done
+        (task: FaceSwapTask) => {
+          console.log('🎉 Task completed:', task);
+          setProcessingProgress(100);
+          setTaskStatus('완료!');
+
+          const processingTime = (Date.now() - startTime) / 1000;
+          
+          const swapResult: SwapResult = {
+            originalImage,
+            swappedImage: task.result_image || originalImage, // fallback to original if no result
+            processingTime,
+            creditsUsed: task.credits_used,
+            swapType: 'single',
+          };
+
+          setResult(swapResult);
+          setCurrentStep('result');
+          onSwapComplete(swapResult);
+          setIsProcessing(false);
+        },
+
+        // onError - called if something goes wrong
+        (error: string) => {
+          console.error('❌ Task failed:', error);
+          setErrorMessage(error);
+          setTaskStatus(`오류: ${error}`);
+          setIsProcessing(false);
+          alert(`처리 실패: ${error}`);
+          setCurrentStep('preview');
+        }
+      );
+
     } catch (error) {
       console.error('Face swap error:', error);
       const errorMsg = error instanceof Error ? error.message : '알 수 없는 오류가 발생했습니다.';
       setErrorMessage(errorMsg);
+      setTaskStatus(`오류: ${errorMsg}`);
       alert(`오류: ${errorMsg}`);
       setCurrentStep('preview');
-    } finally {
       setIsProcessing(false);
     }
   };
 
   const handleRetry = (): void => {
+    // Stop any ongoing polling
+    if (currentTaskId) {
+      taskPollingService.stopPolling(currentTaskId);
+    }
+    
     setOriginalImage('');
     setFaceImage('');
     setOriginalFile(null);
@@ -181,8 +269,19 @@ export const SingleFaceSwap: React.FC<SingleFaceSwapProps> = ({
     setProcessingProgress(0);
     setErrorMessage('');
     setIsProcessing(false);
+    setCurrentTaskId('');
+    setTaskStatus('');
     setCurrentStep('upload');
   };
+
+  // Cleanup on unmount
+  React.useEffect(() => {
+    return () => {
+      if (currentTaskId) {
+        taskPollingService.stopPolling(currentTaskId);
+      }
+    };
+  }, [currentTaskId]);
 
   const canProceed = originalImage && faceImage;
 
@@ -203,7 +302,7 @@ export const SingleFaceSwap: React.FC<SingleFaceSwapProps> = ({
         <p className="text-sm text-blue-600 font-medium">💡 정면을 바라보는 선명한 사진일수록 결과가 좋아요!</p>
       </div>
 
-      {!replicateService.isConfigured() && <ApiKeySetup />}
+      {!aiFaceSwapService.isConfigured() && <ApiKeySetup apiProvider="aifaceswap" />}
 
       <div className="grid md:grid-cols-2 gap-8">
         {/* 원본 이미지 업로드 */}
@@ -377,25 +476,43 @@ export const SingleFaceSwap: React.FC<SingleFaceSwapProps> = ({
         <p className="text-sm text-gray-600 mb-8">{Math.round(processingProgress)}% 완료</p>
       </div>
 
-      <div className="space-y-3 text-sm text-gray-500">
-        <p className="flex items-center justify-center space-x-2">
-          <div className="w-2 h-2 bg-blue-500 rounded-full animate-bounce"></div>
-          <span>Replicate AI로 얼굴 인식 중...</span>
-        </p>
-        <p className="flex items-center justify-center space-x-2">
-          <div className="w-2 h-2 bg-green-500 rounded-full animate-bounce delay-150"></div>
-          <span>Advanced Face Swap 모델 처리 중...</span>
-        </p>
-        <p className="flex items-center justify-center space-x-2">
-          <div className="w-2 h-2 bg-purple-500 rounded-full animate-bounce delay-300"></div>
-          <span>고품질 이미지 생성 및 업스케일링 중...</span>
-        </p>
+      <div className="space-y-4">
+        {/* Real-time Task Status */}
+        <div className="bg-blue-50 rounded-xl p-4 border border-blue-200">
+          <div className="flex items-center justify-center space-x-3">
+            <div className="w-3 h-3 bg-blue-500 rounded-full animate-pulse"></div>
+            <span className="text-blue-800 font-medium">
+              {taskStatus || 'AI가 얼굴을 바꾸는 중...'}
+            </span>
+          </div>
+          {currentTaskId && (
+            <div className="text-xs text-blue-600 text-center mt-2">
+              Task ID: {currentTaskId}
+            </div>
+          )}
+        </div>
+
+        {/* Traditional Progress Steps */}
+        <div className="space-y-3 text-sm text-gray-500">
+          <div className="flex items-center justify-center space-x-2">
+            <div className="w-2 h-2 bg-blue-500 rounded-full animate-bounce"></div>
+            <span>실시간 웹훅 시스템으로 처리 중...</span>
+          </div>
+          <div className="flex items-center justify-center space-x-2">
+            <div className="w-2 h-2 bg-green-500 rounded-full animate-bounce delay-150"></div>
+            <span>AIFaceSwap.io 고품질 처리...</span>
+          </div>
+          <div className="flex items-center justify-center space-x-2">
+            <div className="w-2 h-2 bg-purple-500 rounded-full animate-bounce delay-300"></div>
+            <span>결과를 데이터베이스에서 확인 중...</span>
+          </div>
+        </div>
       </div>
 
       {errorMessage && (
         <div className="mt-6 bg-red-50 border border-red-200 rounded-xl p-4 flex items-center space-x-3">
           <AlertCircle className="w-5 h-5 text-red-500" />
-          <p className="text-red-700">{errorMessage}</p>
+          <span className="text-red-700">{errorMessage}</span>
         </div>
       )}
     </div>
@@ -414,11 +531,42 @@ export const SingleFaceSwap: React.FC<SingleFaceSwapProps> = ({
       {result && (
         <div className="mb-8">
           <div className="bg-white rounded-2xl shadow-xl p-6 mb-6">
-            <BeforeAfterSlider
-              beforeImage={result.originalImage}
-              afterImage={result.swappedImage}
-              className="w-full h-96"
-            />
+            <div className="relative">
+              <div className="max-w-md mx-auto">
+                <img 
+                  src={result.swappedImage} 
+                  alt="AI 얼굴 바꾸기 결과" 
+                  className="w-full h-auto rounded-xl shadow-lg border border-gray-200"
+                  style={{ maxHeight: '500px', objectFit: 'contain' }}
+                />
+                <div className="absolute top-4 left-4 bg-gradient-to-r from-green-500 to-blue-500 text-white px-3 py-1 rounded-full text-sm font-medium shadow-lg">
+                  ✨ AI 생성 완료
+                </div>
+              </div>
+            </div>
+            
+            {/* Before/After comparison */}
+            <div className="mt-6 pt-6 border-t border-gray-200">
+              <h3 className="text-lg font-semibold text-gray-800 mb-4 text-center">변환 비교</h3>
+              <div className="grid grid-cols-2 gap-4 max-w-lg mx-auto">
+                <div className="text-center">
+                  <p className="text-sm font-medium text-gray-600 mb-2">원본</p>
+                  <img 
+                    src={result.originalImage} 
+                    alt="원본 이미지" 
+                    className="w-full h-24 object-cover rounded-lg shadow border border-gray-200"
+                  />
+                </div>
+                <div className="text-center">
+                  <p className="text-sm font-medium text-gray-600 mb-2">결과</p>
+                  <img 
+                    src={result.swappedImage} 
+                    alt="변환된 이미지" 
+                    className="w-full h-24 object-cover rounded-lg shadow border border-gray-200"
+                  />
+                </div>
+              </div>
+            </div>
           </div>
 
           <div className="bg-blue-50 rounded-xl p-4 mb-6">
@@ -430,13 +578,13 @@ export const SingleFaceSwap: React.FC<SingleFaceSwapProps> = ({
             </p>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div className="flex flex-col sm:flex-row gap-4 justify-center">
             <button
               onClick={handleRetry}
-              className="flex items-center justify-center space-x-2 bg-gray-100 text-gray-700 px-6 py-3 rounded-full font-semibold hover:bg-gray-200 transition-colors"
+              className="flex items-center justify-center space-x-2 bg-white text-gray-700 px-8 py-4 rounded-xl font-semibold hover:bg-gray-50 border-2 border-gray-200 hover:border-gray-300 transition-all duration-200"
             >
               <RefreshCw className="w-5 h-5" />
-              <span>다시 시도하기</span>
+              <span>다시 시도</span>
             </button>
 
             <button 
@@ -444,18 +592,14 @@ export const SingleFaceSwap: React.FC<SingleFaceSwapProps> = ({
                 if (result?.swappedImage) {
                   const link = document.createElement('a');
                   link.href = result.swappedImage;
-                  link.download = `faceswap-result-${Date.now()}.png`;
+                  link.download = `faceswap-result-${Date.now()}.jpg`;
                   link.click();
                 }
               }}
-              className="flex items-center justify-center space-x-2 bg-gradient-to-r from-green-500 to-blue-500 text-white px-6 py-3 rounded-full font-semibold hover:shadow-lg transition-all duration-200 hover:scale-105"
+              className="flex items-center justify-center space-x-2 bg-gradient-to-r from-green-500 to-blue-500 text-white px-8 py-4 rounded-xl font-semibold hover:shadow-xl transition-all duration-200 hover:scale-105 hover:from-green-600 hover:to-blue-600"
             >
               <Download className="w-5 h-5" />
-              <span>다운로드</span>
-            </button>
-
-            <button className="flex items-center justify-center space-x-2 bg-blue-100 text-blue-700 px-6 py-3 rounded-full font-semibold hover:bg-blue-200 transition-colors">
-              <span>공유하기</span>
+              <span>이미지 다운로드</span>
             </button>
           </div>
         </div>
