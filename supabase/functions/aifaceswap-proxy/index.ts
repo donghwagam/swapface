@@ -121,7 +121,7 @@ serve(async (req) => {
         body = {
           source_image: data.source_image,
           face_image: data.face_image,
-          webhook_url: webhook_url
+          webhook: webhook_url
         }
         break
       case 'extract_face':
@@ -136,7 +136,7 @@ serve(async (req) => {
           source_image: data.source_image,
           face_image: data.face_image,
           index: data.index,
-          webhook_url: webhook_url
+          webhook: webhook_url
         }
         break
       case 'check_status':
@@ -186,13 +186,15 @@ serve(async (req) => {
       console.log('Saving faceswap task to database:', responseData.data.task_id)
       
       const { error: dbError } = await supabase
-        .from('face_swap_tasks')
+        .from('tasks')
         .insert({
           task_id: responseData.data.task_id,
           source_image: data.source_image,
           face_image: data.face_image,
           status: 'processing',
-          credits_used: responseData.data.points || 2
+          credits_used: responseData.data.points || 2,
+          provider: 'aifaceswap',
+          task_type: 'single'
         })
 
       if (dbError) {
@@ -205,13 +207,15 @@ serve(async (req) => {
       console.log('Saving multi_faceswap task to database:', responseData.data.task_id)
       
       const { error: dbError } = await supabase
-        .from('face_swap_tasks')
+        .from('tasks')
         .insert({
           task_id: responseData.data.task_id,
           source_image: data.source_image,
-          face_image: Array.isArray(data.face_image) ? data.face_image : [data.face_image],
+          face_images: Array.isArray(data.face_image) ? data.face_image : [data.face_image],
           status: 'processing',
-          credits_used: responseData.data.points || 5
+          credits_used: responseData.data.points || 5,
+          provider: 'aifaceswap',
+          task_type: 'multi'
         })
 
       if (dbError) {
@@ -230,9 +234,9 @@ serve(async (req) => {
         console.log('Task completed, updating database')
         
         const { error: dbError } = await supabase
-          .from('face_swap_tasks')
+          .from('tasks')
           .update({
-            status: 'completed',
+            status: 'succeeded',
             result_image: responseData.data.result_image,
             updated_at: new Date().toISOString()
           })
@@ -241,17 +245,17 @@ serve(async (req) => {
         if (dbError) {
           console.error('Failed to update completed task in database:', dbError)
         } else {
-          console.log('Task status updated to completed in database')
+          console.log('Task status updated to succeeded in database')
         }
       } else if (responseData.data?.status === 'failed') {
         // Task failed, update database
         console.log('Task failed, updating database')
         
         const { error: dbError } = await supabase
-          .from('face_swap_tasks')
+          .from('tasks')
           .update({
             status: 'failed',
-            error_message: responseData.data.error || 'Task processing failed',
+            error: responseData.data.error || 'Task processing failed',
             updated_at: new Date().toISOString()
           })
           .eq('task_id', data.task_id)
@@ -270,16 +274,8 @@ serve(async (req) => {
       console.log(`📊 Query response for ${taskId}: status=${st}`);
       
       if (st === 'completed' && responseData.data.result_image) {
-        console.log('🔄 Syncing completed task to both tables...');
+        console.log('🔄 Updating task status to succeeded...');
         
-        // Update face_swap_tasks table (legacy format - 'completed')
-        await supabase.from('face_swap_tasks').update({
-          status: 'completed',
-          result_image: responseData.data.result_image,
-          updated_at: new Date().toISOString()
-        }).eq('task_id', taskId);
-
-        // Update tasks table (new format - 'succeeded' for client compatibility)
         await supabase.from('tasks').update({
           status: 'succeeded',
           result_image: responseData.data.result_image,
@@ -287,16 +283,8 @@ serve(async (req) => {
         }).eq('task_id', taskId);
         
       } else if (st === 'failed') {
-        console.log('🔄 Syncing failed task to both tables...');
+        console.log('🔄 Updating task status to failed...');
         
-        // Update face_swap_tasks table
-        await supabase.from('face_swap_tasks').update({
-          status: 'failed',
-          error_message: responseData.data?.error || 'Processing failed',
-          updated_at: new Date().toISOString()
-        }).eq('task_id', taskId);
-
-        // Update tasks table
         await supabase.from('tasks').update({
           status: 'failed',
           error: responseData.data?.error || 'Processing failed',
