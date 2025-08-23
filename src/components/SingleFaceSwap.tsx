@@ -3,7 +3,7 @@ import { Upload, Image as ImageIcon, Wand2, Download, RefreshCw, ArrowLeft, Aler
 import { BeforeAfterSlider } from './BeforeAfterSlider';
 import { ApiKeySetup } from './ApiKeySetup';
 import { aiFaceSwapService } from '../services/aifaceswap';
-import { taskPollingService, type FaceSwapTask } from '../services/taskPolling';
+import { faceSwapAPIService } from '../services/faceSwapAPI';
 import type { User as UserType, SwapResult } from '../types';
 
 interface SingleFaceSwapProps {
@@ -107,47 +107,7 @@ export const SingleFaceSwap: React.FC<SingleFaceSwapProps> = ({
       return;
     }
 
-    // Check for existing completed tasks first
-    const existingTasks = await taskPollingService.getAllTasks();
-    // Only find tasks that were actually completed by webhook (not manually created demos)
-    const completedTask = existingTasks.find(task => 
-      task.status === 'completed' && 
-      task.result_image && 
-      // Exclude all demo/test images
-      !task.result_image.includes('pexels.com') &&
-      !task.result_image.includes('images.unsplash.com') &&
-      !task.result_image.includes('temp.aifaceswap.io') &&
-      !task.task_id.includes('demo') &&
-      !task.task_id.includes('test') &&
-      // Only accept actual aifaceswap.io domain results (not temp subdomain)
-      task.result_image.includes('aifaceswap.io') &&
-      !task.result_image.includes('static_img') // Exclude static demo images
-    );
-    
-    console.log('🔍 Looking for real AI results. Found tasks:', existingTasks.length);
-    console.log('🎯 Completed task found:', completedTask);
-
-    if (completedTask) {
-      console.log('🎉 Found existing completed task:', completedTask);
-      
-      const swapResult: SwapResult = {
-        originalImage,
-        swappedImage: completedTask.result_image,
-        processingTime: 0,
-        creditsUsed: completedTask.credits_used,
-        swapType: 'single',
-      };
-
-      console.log('📋 Setting result:', swapResult);
-      setResult(swapResult);
-      setCurrentStep('result');
-      setIsProcessing(false);
-      setProcessingProgress(100);
-      setTaskStatus('완료!');
-      
-      onSwapComplete(swapResult);
-      return;
-    }
+    // Skip task checking for cleaner startup
 
     if (!onCreditDeduct()) {
       alert('크레딧 차감에 실패했습니다.');
@@ -165,84 +125,77 @@ export const SingleFaceSwap: React.FC<SingleFaceSwapProps> = ({
     try {
       // Upload images to get public URLs
       setTaskStatus('이미지를 업로드하는 중...');
-      const sourceImageUrl = await aiFaceSwapService.uploadImage(originalFile);
-      const faceImageUrl = await aiFaceSwapService.uploadImage(faceFile);
+      const sourceImageUrl = await faceSwapAPIService.uploadImage(originalFile);
+      const faceImageUrl = await faceSwapAPIService.uploadImage(faceFile);
 
       setProcessingProgress(20);
-      setTaskStatus('AIFaceSwap.io API 호출 중...');
+      setTaskStatus('웹훅 기반 Face Swap API 호출 중...');
 
-      // Start face swap with AIFaceSwap.io API
-      const response = await aiFaceSwapService.faceSwap({
-        source_image: sourceImageUrl,
-        face_image: faceImageUrl,
-      });
+      // Start face swap with webhook-based API as recommended
+      const response = await faceSwapAPIService.startFaceSwap(sourceImageUrl, faceImageUrl);
 
       console.log('✅ Face swap initiated:', response);
 
-      if (!response.data?.task_id) {
+      if (!response.task_id) {
         throw new Error('API 응답에서 task_id를 받지 못했습니다.');
       }
 
-      const taskId = response.data.task_id;
+      const taskId = response.task_id;
       setCurrentTaskId(taskId);
       setProcessingProgress(30);
       setTaskStatus(`AI가 얼굴을 바꾸는 중... (Task ID: ${taskId})`);
 
-      // Start polling for task completion
-      await taskPollingService.startPolling(
-        taskId,
-        
-        // onUpdate - called every poll
-        (task: FaceSwapTask) => {
+      // Start webhook-based polling (database queries)
+      const result = await faceSwapAPIService.pollTask(taskId, {
+        intervalMs: 3000, // 3 second intervals for faster response
+        maxPolls: 120, // 6 minutes total
+        onUpdate: (task) => {
           console.log('📊 Task update:', task.status);
-          setTaskStatus(`처리 중... 상태: ${task.status}`);
+          setTaskStatus(`처리 중... 상태: ${task.status} (웹훅 대기)`);
           
-          // Update progress based on time elapsed - continue past 90%
+          // Update progress based on time elapsed
           const elapsed = Date.now() - startTime;
-          let estimatedProgress = 30 + (elapsed / 1000) * 3; // Slower progression
+          let estimatedProgress = 30 + (elapsed / 1000) * 2;
           
-          // Add status-based progress boosts
           if (task.status === 'processing') {
             estimatedProgress = Math.min(estimatedProgress + 20, 95);
           }
           
-          // Cap at 95% until completion
           estimatedProgress = Math.min(estimatedProgress, 95);
           setProcessingProgress(estimatedProgress);
         },
-
-        // onComplete - called when task is done
-        (task: FaceSwapTask) => {
-          console.log('🎉 Task completed:', task);
-          setProcessingProgress(100);
-          setTaskStatus('완료!');
-
-          const processingTime = (Date.now() - startTime) / 1000;
-          
-          const swapResult: SwapResult = {
-            originalImage,
-            swappedImage: task.result_image || originalImage, // fallback to original if no result
-            processingTime,
-            creditsUsed: task.credits_used,
-            swapType: 'single',
-          };
-
-          setResult(swapResult);
-          setCurrentStep('result');
-          onSwapComplete(swapResult);
+        onTimeout: () => {
+          console.log('⏰ Webhook polling timeout');
+          setErrorMessage('웹훅 처리 시간이 초과되었습니다.');
+          setTaskStatus('웹훅 시간 초과');
           setIsProcessing(false);
-        },
-
-        // onError - called if something goes wrong
-        (error: string) => {
-          console.error('❌ Task failed:', error);
-          setErrorMessage(error);
-          setTaskStatus(`오류: ${error}`);
-          setIsProcessing(false);
-          alert(`처리 실패: ${error}`);
+          alert('웹훅 처리 시간이 초과되었습니다. 다시 시도해주세요.');
           setCurrentStep('preview');
         }
-      );
+      });
+
+      if (result && (result.status === 'completed' || result.status === 'succeeded') && result.result_image) {
+        console.log('🎉 Task completed:', result);
+        setProcessingProgress(100);
+        setTaskStatus('완료!');
+
+        const processingTime = (Date.now() - startTime) / 1000;
+        
+        const swapResult: SwapResult = {
+          originalImage,
+          swappedImage: result.result_image,
+          processingTime,
+          creditsUsed: result.credits_used || 2,
+          swapType: 'single',
+        };
+
+        setResult(swapResult);
+        setCurrentStep('result');
+        onSwapComplete(swapResult);
+        setIsProcessing(false);
+      } else {
+        throw new Error('작업이 완료되지 않았거나 결과를 받지 못했습니다.');
+      }
 
     } catch (error) {
       console.error('Face swap error:', error);
@@ -256,11 +209,6 @@ export const SingleFaceSwap: React.FC<SingleFaceSwapProps> = ({
   };
 
   const handleRetry = (): void => {
-    // Stop any ongoing polling
-    if (currentTaskId) {
-      taskPollingService.stopPolling(currentTaskId);
-    }
-    
     setOriginalImage('');
     setFaceImage('');
     setOriginalFile(null);
@@ -277,9 +225,7 @@ export const SingleFaceSwap: React.FC<SingleFaceSwapProps> = ({
   // Cleanup on unmount
   React.useEffect(() => {
     return () => {
-      if (currentTaskId) {
-        taskPollingService.stopPolling(currentTaskId);
-      }
+      // Cleanup is handled automatically by the stable polling service
     };
   }, [currentTaskId]);
 

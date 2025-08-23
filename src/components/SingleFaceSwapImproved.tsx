@@ -111,6 +111,20 @@ export const SingleFaceSwapImproved: React.FC<SingleFaceSwapImprovedProps> = ({
       return;
     }
 
+    console.log('=== 🎬 SINGLE FACE SWAP START ===');
+    console.log('📁 Files:', {
+      originalFile: {
+        name: originalFile?.name,
+        size: originalFile?.size,
+        type: originalFile?.type
+      },
+      faceFile: {
+        name: faceFile?.name,
+        size: faceFile?.size,
+        type: faceFile?.type
+      }
+    });
+
     setCurrentStep('processing');
     setProcessingProgress(10);
     setIsProcessing(true);
@@ -121,17 +135,31 @@ export const SingleFaceSwapImproved: React.FC<SingleFaceSwapImprovedProps> = ({
 
     try {
       // Upload images to get public URLs
+      console.log('📤 Step 1/4: Uploading images to Supabase Storage...');
       setTaskStatus('이미지를 업로드하는 중...');
-      const sourceImageUrl = await uploadImageToSupabase(originalFile);
-      const faceImageUrl = await uploadImageToSupabase(faceFile);
+      
+      const uploadStartTime = Date.now();
+      const sourceImageUrl = await uploadImageToSupabase(originalFile!);
+      const uploadMidTime = Date.now();
+      const faceImageUrl = await uploadImageToSupabase(faceFile!);
+      const uploadEndTime = Date.now();
+
+      console.log('✅ Images uploaded:', {
+        sourceImageUrl: sourceImageUrl.substring(0, 100) + '...',
+        faceImageUrl: faceImageUrl.substring(0, 100) + '...',
+        source_upload_time: `${uploadMidTime - uploadStartTime}ms`,
+        face_upload_time: `${uploadEndTime - uploadMidTime}ms`,
+        total_upload_time: `${uploadEndTime - uploadStartTime}ms`
+      });
 
       setProcessingProgress(20);
       setTaskStatus('서버에 작업 요청 중...');
 
       // Start face swap using improved server-side API
+      console.log('📤 Step 2/4: Starting face swap via API...');
       const response = await faceSwapAPIService.startFaceSwap(sourceImageUrl, faceImageUrl);
 
-      console.log('✅ Face swap initiated via server:', response);
+      console.log('✅ Face swap API response received:', response);
 
       if (!response.ok || !response.id) {
         throw new Error(response.error || '서버에서 작업 시작에 실패했습니다.');
@@ -139,13 +167,33 @@ export const SingleFaceSwapImproved: React.FC<SingleFaceSwapImprovedProps> = ({
 
       const taskId = response.id;
       const providerTaskId = response.task_id;
+      
+      console.log('🔍 Step 3/4: Task ID validation & polling setup');
+      console.log('📊 Task IDs:', {
+        internal_id: taskId,
+        provider_task_id: providerTaskId,
+        provider_id_length: providerTaskId?.length,
+        is_valid_provider_id: providerTaskId && providerTaskId.length >= 24
+      });
+      
+      // Validate provider task_id
+      if (!providerTaskId || providerTaskId.length < 24) {
+        console.warn('⚠️ CRITICAL: task_id does not look like provider task id:', providerTaskId);
+        console.warn('⚠️ This may cause webhook matching failure!');
+      } else {
+        console.log('✅ Valid provider task_id received');
+      }
+      
       setCurrentTaskId(taskId);
       setProcessingProgress(30);
       setTaskStatus(`AI가 얼굴을 바꾸는 중... (Task ID: ${providerTaskId || taskId})`);
 
-      // Start enhanced polling using new API service
-      const result = await faceSwapAPIService.pollTask(taskId, {
-        intervalMs: 5000,
+      // CRITICAL: Poll using provider task_id for webhook matching
+      const pollTaskId = providerTaskId || taskId;
+      console.log('🔄 Step 4/4: Starting polling with task_id:', pollTaskId);
+      
+      const result = await faceSwapAPIService.pollTask(pollTaskId, {
+        intervalMs: 3000, // 3 second intervals (faster)
         maxPolls: 180, // 15 minutes
         
         // onUpdate - called every poll
@@ -181,7 +229,10 @@ export const SingleFaceSwapImproved: React.FC<SingleFaceSwapImprovedProps> = ({
         throw new Error('작업이 시간 초과되었습니다.');
       }
 
-      if (result.status === 'succeeded' && result.result_image) {
+      // Handle both 'succeeded' (tasks table) and 'completed' (face_swap_tasks table)  
+      const isSuccess = (result.status === 'succeeded' || result.status === 'completed') && result.result_image;
+      
+      if (isSuccess) {
         // Success - create result
         const endTime = Date.now();
         const swapResult: SwapResult = {

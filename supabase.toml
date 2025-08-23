@@ -1,0 +1,34 @@
+# Supabase configuration file
+
+[api]
+enabled = true
+port = 54321
+schemas = ["public", "graphql_public"]
+extra_search_path = ["public", "extensions"]
+max_rows = 1000
+
+[auth]
+enabled = true
+site_url = "http://localhost:3000"
+additional_redirect_urls = ["https://localhost:3000"]
+jwt_expiry = 3600
+enable_signup = true
+enable_confirmations = false
+
+[functions]
+# Default function configuration
+# Individual function settings can override these
+
+# Make aifaceswap-webhook public (no JWT verification)
+[functions.aifaceswap-webhook]
+verify_jwt = false
+
+# Make aifaceswap-proxy public for webhook reception
+[functions.aifaceswap-proxy]
+verify_jwt = false
+
+[functions.faceswap-start] 
+verify_jwt = true
+
+[functions.aifaceswap-callback]
+verify_jwt = false

@@ -72,29 +72,66 @@ export const MultiFaceSwap: React.FC<MultiFaceSwapProps> = ({
   };
 
   const handleFiles = async (files: FileList): Promise<void> => {
+    console.log('=== 📁 MULTI-FACE FILE UPLOAD START ===');
+    
     const file = files[0];
     if (!file || !file.type.startsWith('image/')) {
+      console.warn('❌ Invalid file type:', file?.type || 'no file');
       alert('이미지 파일만 업로드할 수 있습니다.');
       return;
     }
 
+    console.log('📄 File details:', {
+      name: file.name,
+      size: `${(file.size / 1024 / 1024).toFixed(2)}MB`,
+      type: file.type,
+      lastModified: new Date(file.lastModified).toLocaleString()
+    });
+
     const reader = new FileReader();
     reader.onload = async (e) => {
+      console.log('📖 File read complete, starting face detection...');
+      
       const imageUrl = e.target?.result as string;
+      console.log('🖼️ Image data URL created:', {
+        length: imageUrl.length,
+        preview: imageUrl.substring(0, 50) + '...',
+        isDataURL: imageUrl.startsWith('data:')
+      });
+      
       setOriginalImage(imageUrl);
       
       try {
+        console.log('=== 👁️ FACE DETECTION START ===');
         console.log('🔍 Detecting faces in uploaded image...');
+        console.log('📤 Calling aiFaceSwapService.extractFacesFromFile()...');
+        
+        const detectionStartTime = Date.now();
         
         // Extract faces directly using file upload (no URL needed)
         const response = await aiFaceSwapService.extractFacesFromFile(file);
         
+        const detectionDuration = Date.now() - detectionStartTime;
+        console.log(`⏱️ Face detection request took ${detectionDuration}ms`);
+        console.log('📋 Face detection API response:', {
+          code: response.code,
+          message: response.message,
+          data: response.data
+        });
+        
         if (response.code !== 200) {
+          console.error('❌ Face detection failed:', response);
           throw new Error(`Face detection failed: ${response.message}`);
         }
 
         // Convert API response to our face selection format and create thumbnails
         const detectedFaceBoxes = response.data.faces || [];
+        console.log('📊 Raw face detection results:', {
+          total_faces: detectedFaceBoxes.length,
+          face_coordinates: detectedFaceBoxes
+        });
+        
+        console.log('🎯 Converting API response to FaceSelection format...');
         const faces: FaceSelection[] = await Promise.all(detectedFaceBoxes.map(async (face, index) => {
           return new Promise<FaceSelection>((resolve) => {
             // Create canvas to extract face thumbnail
@@ -193,15 +230,29 @@ export const MultiFaceSwap: React.FC<MultiFaceSwapProps> = ({
           });
         }));
 
-        console.log(`✅ Detected ${faces.length} faces with thumbnails:`, faces);
+        console.log(`✅ Face detection completed successfully!`);
+        console.log(`📊 Results: ${faces.length} faces detected with thumbnails`);
+        console.log('👥 Face details:', faces.map((f, i) => ({
+          face_id: f.id,
+          position: `x:${f.x.toFixed(1)}%, y:${f.y.toFixed(1)}%`,
+          size: `w:${f.width.toFixed(1)}%, h:${f.height.toFixed(1)}%`,
+          has_thumbnail: !!f.extractedThumbnail
+        })));
+        
         setDetectedFaces(faces);
         setCurrentStep('preview');
+        console.log('=== END FACE DETECTION SUCCESS ===');
         
       } catch (error) {
-        console.error('Face detection error:', error);
+        console.error('💥 Face detection error:', error);
+        console.error('❌ Error details:', {
+          message: error instanceof Error ? error.message : 'Unknown error',
+          stack: error instanceof Error ? error.stack : undefined
+        });
         
         // Fallback to mock faces if API fails - generate more faces for better coverage
-        console.log('⚠️ Using mock face detection as fallback');
+        console.log('=== ⚠️ FALLBACK MODE ACTIVATED ===');
+        console.log('🔄 Using mock face detection as fallback');
         const mockFaces: FaceSelection[] = [
           { id: 'face-0', x: 15, y: 10, width: 20, height: 30 },
           { id: 'face-1', x: 40, y: 15, width: 20, height: 30 },
@@ -209,25 +260,45 @@ export const MultiFaceSwap: React.FC<MultiFaceSwapProps> = ({
           { id: 'face-3', x: 25, y: 45, width: 18, height: 28 },
           { id: 'face-4', x: 55, y: 50, width: 18, height: 28 },
         ];
+        console.log('🎭 Mock faces generated:', mockFaces.length);
         setDetectedFaces(mockFaces);
         setCurrentStep('preview');
+        console.log('=== END FALLBACK MODE ===');
       }
     };
     reader.readAsDataURL(file);
   };
 
   const handleSingleFaceUpload = async (e: React.ChangeEvent<HTMLInputElement>, faceId: string): Promise<void> => {
+    console.log('=== 📤 SINGLE FACE UPLOAD START ===');
+    
     const file = e.target.files?.[0];
-    if (!file) return;
+    if (!file) {
+      console.warn('❌ No file selected');
+      return;
+    }
+
+    console.log('📄 Face replacement file details:', {
+      target_face_id: faceId,
+      file_name: file.name,
+      file_size: `${(file.size / 1024 / 1024).toFixed(2)}MB`,
+      file_type: file.type
+    });
 
     try {
-      console.log('🔄 Uploading face image:', file.name);
+      console.log('🔄 Starting face image upload to Supabase Storage...');
+      const uploadStartTime = Date.now();
       
       // Upload to Supabase Storage to get public URL
       const publicUrl = await aiFaceSwapService.uploadImage(file);
       
+      const uploadDuration = Date.now() - uploadStartTime;
+      console.log(`⏱️ Upload completed in ${uploadDuration}ms`);
+      console.log('🔗 Public URL:', publicUrl);
+      
       // Create local preview URL for UI
       const localPreview = URL.createObjectURL(file);
+      console.log('🖼️ Local preview URL created');
       
       // Update the specific face's replacement image
       setDetectedFaces(prev => 
@@ -238,10 +309,22 @@ export const MultiFaceSwap: React.FC<MultiFaceSwapProps> = ({
         )
       );
       
-      console.log('✅ Face image uploaded successfully:', publicUrl);
+      console.log('✅ Face replacement assignment complete:', {
+        face_id: faceId,
+        public_url: publicUrl,
+        has_preview: !!localPreview
+      });
+      console.log('=== END FACE UPLOAD SUCCESS ===');
+      
     } catch (error) {
-      console.error('❌ Face image upload failed:', error);
+      console.error('💥 Face image upload failed:', error);
+      console.error('❌ Upload error details:', {
+        message: error instanceof Error ? error.message : 'Unknown error',
+        face_id: faceId,
+        file_name: file.name
+      });
       alert('이미지 업로드에 실패했습니다. 다시 시도해 주세요.');
+      console.log('=== END FACE UPLOAD FAILED ===');
     }
   };
 
@@ -261,91 +344,241 @@ export const MultiFaceSwap: React.FC<MultiFaceSwapProps> = ({
   };
 
   const handleSwap = async (): Promise<void> => {
+    console.log('=== 🚀 MULTI-FACE SWAP START ===');
+    
+    // Pre-flight checks
+    console.log('✅ Pre-flight checks:');
+    console.log('💰 Credit check:', {
+      can_afford: canAffordSwap,
+      free_trials_used: user.freeTrialsUsed,
+      max_free_trials: user.maxFreeTrials,
+      current_credits: user.credits,
+      required_credits: creditCost
+    });
+    
     if (!canAffordSwap) {
+      console.warn('❌ Insufficient credits');
       alert('크레딧이 부족합니다. 크레딧을 충전해 주세요.');
       return;
     }
 
     const assignedFaces = detectedFaces.filter(face => face.replacementImage);
+    console.log('👥 Face assignment check:', {
+      total_faces: detectedFaces.length,
+      assigned_faces: assignedFaces.length,
+      face_assignments: assignedFaces.map((f, i) => ({
+        id: f.id,
+        has_replacement: !!f.replacementImage,
+        replacement_url: f.replacementImage
+      }))
+    });
+    
     if (assignedFaces.length === 0) {
+      console.warn('❌ No faces assigned for replacement');
       alert('최소 하나의 얼굴에 대체 이미지를 지정해주세요.');
       return;
     }
 
+    console.log('💳 Attempting credit deduction...');
     if (!onCreditDeduct()) {
+      console.error('❌ Credit deduction failed');
       alert('크레딧 차감에 실패했습니다.');
       return;
     }
+    console.log('✅ Credits deducted successfully');
 
+    console.log('🎬 Starting processing phase...');
     setCurrentStep('processing');
     setProcessingProgress(0);
 
     try {
-      console.log('🚀 Starting multi-face swap...');
+      console.log('=== 🔥 MULTI-FACE SWAP API CALL ===');
+      console.log('🚀 Initiating multi-face swap request...');
       
       const startTime = Date.now();
       const faceImageUrls = assignedFaces.map(face => face.replacementImage!);
-      const indices = assignedFaces.map((_, index) => index);
+      
+      // 🔧 FIX: Send actual detected face indices, not selection order
+      const indices = assignedFaces.map(face => {
+        const idx = detectedFaces.findIndex(f => f.id === face.id);
+        return idx >= 0 ? idx : 0; // Fallback to 0 if not found
+      });
+      
+      console.log('📊 Multi-face swap parameters:', {
+        assigned_faces: assignedFaces.length,
+        face_urls: faceImageUrls.map((url, i) => `Face ${i}: ${url.substring(0, 50)}...`),
+        face_indices: indices,
+        mapping: assignedFaces.map((face, i) => ({
+          face_id: face.id,
+          index: indices[i],
+          url: faceImageUrls[i]?.substring(0, 50) + '...'
+        }))
+      });
 
+      console.log('📤 Step 1: Uploading original image to Supabase Storage...');
+      const originalUploadStartTime = Date.now();
+      
       // Upload original image to get public URL
       const originalFile = await fetch(originalImage).then(r => r.blob());
       const originalImageFile = new File([originalFile], 'original.jpg', { type: 'image/jpeg' });
-      const originalPublicUrl = await aiFaceSwapService.uploadImage(originalImageFile);
+      const originalPublicUrl = await faceSwapAPIService.uploadImage(originalImageFile);
       
-      // Call multi-face swap API with public URLs
-      const response = await aiFaceSwapService.multiFaceSwap({
+      const originalUploadDuration = Date.now() - originalUploadStartTime;
+      console.log(`✅ Original image uploaded in ${originalUploadDuration}ms: ${originalPublicUrl}`);
+      
+      console.log('📤 Step 2: Calling multi-face swap API via aifaceswap-proxy...');
+      const apiRequestStartTime = Date.now();
+      const requestPayload = {
+        action: 'multi_faceswap',
         source_image: originalPublicUrl,
         face_image: faceImageUrls,
         index: indices
+      };
+      console.log('📋 API request payload:', {
+        action: requestPayload.action,
+        source_image: requestPayload.source_image.substring(0, 50) + '...',
+        face_image_count: requestPayload.face_image.length,
+        face_indices: requestPayload.index
+      });
+      
+      // Call multi-face swap API using proxy (handles webhook automatically)
+      const response = await fetch(`https://afsmkbuspfmhenrccwru.supabase.co/functions/v1/aifaceswap-proxy`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFmc21rYnVzcGZtaGVucmNjd3J1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTU2ODcxNzUsImV4cCI6MjA3MTI2MzE3NX0.x2RCn4DBe10CKNC9LZ6CIvwuj__IU5cbxPJd7JJIU-U',
+        },
+        body: JSON.stringify(requestPayload)
+      });
+      
+      const responseData = await response.json();
+      
+      const apiRequestDuration = Date.now() - apiRequestStartTime;
+      console.log(`⏱️ API request completed in ${apiRequestDuration}ms`);
+      console.log('📡 API response:', {
+        status: response.status,
+        statusText: response.statusText,
+        response_code: responseData.code,
+        message: responseData.message,
+        has_task_id: !!responseData.data?.task_id
       });
 
-      if (response.code !== 200) {
-        throw new Error(`API Error: ${response.message}`);
+      if (responseData.code !== 200) {
+        console.error('❌ API request failed:', responseData);
+        throw new Error(`API Error: ${responseData.message}`);
       }
 
-      const taskId = response.data.task_id;
-      console.log('✅ Multi-face swap initiated:', taskId);
+      const taskId = responseData.data.task_id;
+      console.log('🔍 Provider task_id validation:', {
+        task_id: taskId,
+        length: taskId?.length,
+        is_valid: taskId && taskId.length >= 24,
+        type: typeof taskId
+      });
+      
+      if (!taskId || taskId.length < 24) {
+        console.warn('⚠️ CRITICAL: task_id does not look like provider task id:', taskId);
+        console.warn('⚠️ This will cause webhook matching failure!');
+      } else {
+        console.log('✅ Valid provider task_id received for multi-face swap');
+      }
+      
+      console.log('✅ Multi-face swap initiated successfully, starting webhook polling...');
 
-      // Start polling for completion
+      // Start webhook-based polling (database queries)
+      console.log('=== 🔄 MULTI-FACE POLLING START ===');
+      console.log('📊 Polling configuration:', {
+        task_id: taskId,
+        interval_ms: 3000,
+        max_polls: 120,
+        total_timeout_mins: 6
+      });
+      
       const result = await faceSwapAPIService.pollTask(taskId, {
-        intervalMs: 5000,
-        maxPolls: 180,
+        intervalMs: 3000, // 3 second intervals for faster response
+        maxPolls: 120, // 6 minutes total
         onUpdate: (task) => {
-          console.log('📊 Multi-face swap progress:', task.status);
+          console.log('📊 Multi-face swap polling progress:', {
+            status: task?.status || 'processing',
+            has_result: !!task?.result_image,
+            updated_at: task?.updated_at
+          });
           const elapsed = Date.now() - startTime;
-          let progress = 30 + (elapsed / 1000) * 3;
+          let progress = 30 + (elapsed / 1000) * 2;
           progress = Math.min(progress + 20, 95);
           setProcessingProgress(Math.min(progress, 95));
+        },
+        onTimeout: () => {
+          console.log('⏰ Multi-face swap webhook polling timeout');
+          alert('웹훅 처리 시간이 초과되었습니다. 다시 시도해주세요.');
+          setCurrentStep('preview');
         }
       });
 
-      if (result && result.status === 'succeeded' && result.result_image) {
-        console.log('🎉 Multi-face swap completed successfully');
+      console.log('📈 Polling completed, analyzing result...');
+      
+      // Handle both 'succeeded' (tasks table) and 'completed' (face_swap_tasks table)
+      const isSuccess = result && (result.status === 'succeeded' || result.status === 'completed') && result.result_image;
+      console.log('🔍 Success validation:', {
+        has_result: !!result,
+        status: result?.status,
+        has_image: !!result?.result_image,
+        is_success: isSuccess
+      });
+      
+      if (isSuccess) {
+        console.log('🎉 Multi-face swap completed successfully!');
         
         const processingTime = (Date.now() - startTime) / 1000;
+        console.log('⏱️ Total processing time:', `${processingTime.toFixed(2)}s`);
+        
         const swapResult: MultiFaceSwapResult = {
           originalImage,
-          swappedImage: result.result_image,
+          swappedImage: result.result_image || '',
           processingTime,
-          creditsUsed: response.data.points || creditCost,
+          creditsUsed: responseData.data?.points || creditCost,
           facesDetected: detectedFaces.length,
           facesSwapped: assignedFaces.length,
         };
+        
+        console.log('📊 Final swap result:', {
+          has_original: !!swapResult.originalImage,
+          has_swapped: !!swapResult.swappedImage,
+          processing_time: swapResult.processingTime,
+          credits_used: swapResult.creditsUsed,
+          faces_detected: swapResult.facesDetected,
+          faces_swapped: swapResult.facesSwapped
+        });
         
         setProcessingProgress(100);
         setResult(swapResult);
         setCurrentStep('result');
         onSwapComplete(swapResult);
+        console.log('=== END MULTI-FACE SWAP SUCCESS ===');
         
       } else {
+        console.error('❌ Multi-face swap failed or timed out');
+        console.error('💥 Failure details:', {
+          has_result: !!result,
+          status: result?.status,
+          error: result?.error,
+          has_image: !!result?.result_image
+        });
         throw new Error('Face swap processing failed or timed out');
       }
 
     } catch (error) {
-      console.error('Multi-face swap error:', error);
+      console.error('💥 Multi-face swap error:', error);
+      console.error('❌ Error details:', {
+        message: error instanceof Error ? error.message : 'Unknown error',
+        stack: error instanceof Error ? error.stack : undefined,
+        processing_step: 'multi_face_swap'
+      });
+      
       const errorMsg = error instanceof Error ? error.message : '알 수 없는 오류가 발생했습니다.';
       alert(`오류: ${errorMsg}`);
       setCurrentStep('preview');
+      console.log('=== END MULTI-FACE SWAP FAILED ===');
     }
   };
 

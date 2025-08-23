@@ -109,7 +109,7 @@ class AIFaceSwapService {
   }
 
   /**
-   * Extract faces from image file directly using Supabase SDK
+   * Extract faces from image file using aifaceswap-proxy
    */
   async extractFacesFromFile(file: File): Promise<ExtractFaceResponse> {
     try {
@@ -119,30 +119,23 @@ class AIFaceSwapService {
         type: file.type
       });
       
-      // Use Supabase SDK to call Edge Function with file upload
-      const formData = new FormData();
-      formData.append('img', file);
+      // First upload image to get public URL
+      const imageUrl = await this.uploadImage(file);
+      console.log('📤 Image uploaded for face detection:', imageUrl);
       
-      const { data, error } = await supabase.functions.invoke('faceswap-start/extract_face', {
-        body: formData
-      });
+      // Use aifaceswap-proxy to call extract_face API
+      const response = await callAIFaceSwapAPI('extract_face', { img: imageUrl });
       
-      if (error) {
-        console.error('❌ Supabase function error:', error);
-        throw new Error(`Extract faces failed: ${error.message}`);
-      }
-      
-      if (!data || (data.code && data.code !== 200)) {
-        console.error('❌ Extract faces API error:', data);
-        throw new Error(`Extract faces failed: ${data?.message || 'unknown error'}`);
+      if (response.code !== 200) {
+        throw new Error(`Face detection failed: ${response.message}`);
       }
       
       console.log('✅ Face detection successful:', {
-        facesFound: data?.data?.faces?.length || 0,
-        response: data
+        facesFound: response?.data?.faces?.length || 0,
+        response: response
       });
       
-      return data;
+      return response;
       
     } catch (error) {
       console.error('❌ Extract faces from file failed:', error);
@@ -158,6 +151,80 @@ class AIFaceSwapService {
   }
 
   /**
+   * Check task status directly with AIFaceSwap API using query action
+   */
+  async getTaskStatus(taskId: string): Promise<any> {
+    try {
+      const response = await callAIFaceSwapAPI('query', { task_id: taskId });
+      return response;
+    } catch (error) {
+      console.error('❌ Task status check failed:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Poll task status with direct AIFaceSwap API calls
+   */
+  async pollTaskDirect(taskId: string, options: {
+    intervalMs?: number;
+    maxPolls?: number;
+    onUpdate?: (task: any) => void;
+  } = {}): Promise<any> {
+    const interval = options.intervalMs || 5000;
+    const maxPolls = options.maxPolls || 180;
+    
+    console.log(`🔄 Starting direct AIFaceSwap polling for task: ${taskId}`);
+    console.log(`📊 Polling config: ${interval}ms intervals, max ${maxPolls} polls`);
+
+    for (let i = 0; i < maxPolls; i++) {
+      try {
+        console.log(`📊 Direct poll ${i + 1}: Checking task status: ${taskId}`);
+        
+        const task = await this.getTaskStatus(taskId);
+        
+        if (task && task.code === 200) {
+          const status = task.data?.status || 'unknown';
+          console.log(`📈 Task status: ${status}`, task.data);
+          
+          if (options.onUpdate) {
+            options.onUpdate({ ...task.data, status });
+          }
+          
+          if (status === 'completed' || status === 'succeeded') {
+            console.log('🎉 Task completed successfully');
+            return task.data;
+          }
+          
+          if (status === 'failed' || status === 'error') {
+            console.log('❌ Task failed');
+            throw new Error(`Task failed: ${task.data?.error || 'Unknown error'}`);
+          }
+        } else {
+          console.log(`⚠️ Poll ${i + 1}: Invalid response`, task);
+        }
+
+        // Wait before next poll
+        if (i < maxPolls - 1) {
+          await new Promise(resolve => setTimeout(resolve, interval));
+        }
+        
+      } catch (error) {
+        console.error(`💥 Poll ${i + 1} exception:`, error);
+        // Continue polling despite errors for first few attempts
+        if (i < 3) {
+          await new Promise(resolve => setTimeout(resolve, interval));
+          continue;
+        }
+        throw error;
+      }
+    }
+
+    console.log('⏰ Direct polling timeout reached');
+    throw new Error('Task polling timeout');
+  }
+
+  /**
    * Basic video face swap
    */
   async videoFaceSwap(request: VideoFaceSwapRequest): Promise<FaceSwapResponse> {
@@ -168,7 +235,8 @@ class AIFaceSwapService {
    * Check task status directly from AIFaceSwap.io API
    */
   async checkTaskStatus(taskId: string): Promise<any> {
-    return this.makeRequest<any>('check_status', { task_id: taskId });
+    // 🔧 FIX: Unified to use query action internally
+    return this.getTaskStatus(taskId);
   }
 
   /**

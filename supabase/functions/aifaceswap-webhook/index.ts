@@ -81,79 +81,81 @@ serve(async (req) => {
 
     console.log(`Processing task: ${task_id}, success: ${success}, type: ${type}, result: ${result_image}`);
 
-    // Use Supabase client instead of direct REST API
-    const supabaseUrl = 'https://afsmkbuspfmhenrccwru.supabase.co';
-    const supabaseServiceKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFmc21rYnVzcGZtaGVucmNjd3J1Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc1NTY4NzE3NSwiZXhwIjoyMDcxMjYzMTc1fQ.9QE4Hj86rUCy6vxQpppJG9-QlzQY7kSbZHI5oFyKvUU';
+    // Use environment variables for security
+    const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
+    const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
-    // Prepare update data based on webhook result
-    let updateData: any = { 
-      updated_at: new Date().toISOString()
+    console.log("📝 Preparing update data for both tables...");
+
+    const common = {
+      updated_at: new Date().toISOString(),
+      ...(result_image ? { result_image } : {})
     };
 
-    if (success === 1) {
-      if (result_image) {
-        updateData.status = "completed";
-        updateData.result_image = result_image;
-        console.log(`✅ SUCCESS: Task ${task_id} completed with image: ${result_image}`);
-      } else {
-        updateData.status = "failed";
-        updateData.error_message = "No result image provided despite success=1";
-        console.log(`⚠️ PARTIAL SUCCESS: Task ${task_id} marked as success but no result image`);
-      }
-    } else {
-      updateData.status = "failed";
-      updateData.error_message = "Provider reported failure (success=0)";
-      console.log(`❌ FAILED: Task ${task_id} failed (success=0)`);
-    }
+    // face_swap_tasks table update (legacy - uses 'completed')
+    const updateFaceSwapTasks = {
+      ...common,
+      status: (success === 1 && result_image) ? 'completed' : 'failed',
+      ...(success === 1 && !result_image ? { error_message: 'No result image provided' } : {}),
+      ...(success === 0 ? { error_message: 'Provider reported failure (success=0)' } : {})
+    };
 
-    console.log("📝 Updating database with:", updateData);
+    // tasks table update (new - uses 'succeeded' for client compatibility)
+    const updateTasks = {
+      ...common,
+      status: (success === 1 && result_image) ? 'succeeded' : 'failed', // Client expects 'succeeded'
+      ...(success === 1 && !result_image ? { error: 'No result image provided' } : {}),
+      ...(success === 0 ? { error: 'Provider reported failure (success=0)' } : {})
+    };
 
-    // Update task in database using Supabase client
-    const { data: dbData, error: dbError } = await supabase
+    // 1) Try face_swap_tasks first
+    let { data: fsRows, error: fsErr } = await supabase
       .from('face_swap_tasks')
-      .update(updateData)
+      .update(updateFaceSwapTasks)
       .eq('task_id', task_id)
-      .select()
-      .single();
+      .select();
 
-    if (dbError) {
-      console.error("❌ Database update failed:", dbError);
-      return new Response(JSON.stringify({ 
-        ok: false, 
-        error: 'Database update failed',
-        detail: dbError.message
-      }), { 
-        status: 500, 
-        headers: { ...corsHeaders, "Content-Type": "application/json" }
-      });
+    if (fsErr) {
+      console.error('face_swap_tasks update error:', fsErr);
     }
 
-    if (!dbData) {
-      console.error("⚠️ No task found with task_id:", task_id);
-      return new Response(JSON.stringify({ 
-        ok: false, 
-        error: 'Task not found',
-        task_id: task_id
-      }), { 
-        status: 404, 
-        headers: { ...corsHeaders, "Content-Type": "application/json" }
-      });
-    }
+    // 2) If no rows in face_swap_tasks, try tasks table
+    if (!fsRows || fsRows.length === 0) {
+      console.log('No rows in face_swap_tasks, trying tasks table...');
+      
+      const { data: tRows, error: tErr } = await supabase
+        .from('tasks')
+        .update(updateTasks)
+        .eq('task_id', task_id)
+        .select();
 
-    console.log("✅ Database updated successfully:", {
-      id: dbData.id,
-      task_id: dbData.task_id,
-      status: dbData.status,
-      has_result: !!dbData.result_image
-    });
+      if (tErr) {
+        console.error('tasks update error:', tErr);
+        return new Response(JSON.stringify({ ok: false, error: 'Database update failed' }), {
+          status: 500,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        });
+      }
+
+      if (!tRows || tRows.length === 0) {
+        console.error('No task found in either table for task_id:', task_id);
+        return new Response(JSON.stringify({ ok: false, error: 'Task not found', task_id }), {
+          status: 404,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        });
+      }
+
+      console.log('✅ Updated tasks table:', { task_id, status: updateTasks.status, has_result: !!updateTasks.result_image });
+    } else {
+      console.log('✅ Updated face_swap_tasks table:', { task_id, status: updateFaceSwapTasks.status, has_result: !!updateFaceSwapTasks.result_image });
+    }
 
     return new Response(JSON.stringify({ 
       ok: true, 
-      message: "Webhook processed successfully",
-      task_id: task_id,
-      status: dbData.status,
-      result_available: !!dbData.result_image
+      task_id, 
+      status: success === 1 && result_image ? 'succeeded' : 'failed', 
+      result_available: !!result_image
     }), {
       status: 200,
       headers: { ...corsHeaders, "Content-Type": "application/json" }

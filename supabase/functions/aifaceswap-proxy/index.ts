@@ -4,6 +4,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  'Access-Control-Allow-Methods': 'POST, GET, OPTIONS',
 }
 
 serve(async (req) => {
@@ -91,7 +92,7 @@ serve(async (req) => {
       })
     }
 
-    const { action, data } = parsedBody
+    const { action, ...data } = parsedBody
     console.log('Parsed action:', action)
     console.log('Parsed data keys:', Object.keys(data || {}))
     
@@ -108,43 +109,42 @@ serve(async (req) => {
     }
     console.log('API key found:', aifaceswapApiKey.substring(0, 20) + '...')
 
-    let url = ''
+    const url = new URL(req.url)
+    const webhook_url = `${url.origin}/functions/v1/aifaceswap-webhook`
+
+    let apiUrl = ''
     let body = null
 
     switch (action) {
       case 'faceswap':
-        url = 'https://aifaceswap.io/api/aifaceswap/v1/faceswap'
+        apiUrl = 'https://aifaceswap.io/api/aifaceswap/v1/faceswap'
         body = {
           source_image: data.source_image,
           face_image: data.face_image,
-          webhook: `${supabaseUrl}/functions/v1/aifaceswap-proxy`
+          webhook_url: webhook_url
         }
         break
       case 'extract_face':
-        url = 'https://aifaceswap.io/api/aifaceswap/v1/extract_face'
+        apiUrl = 'https://aifaceswap.io/api/aifaceswap/v1/extract_face'
         body = {
           img: data.img
         }
         break
       case 'multi_faceswap':
-        url = 'https://aifaceswap.io/api/aifaceswap/v1/multi_faceswap'
+        apiUrl = 'https://aifaceswap.io/api/aifaceswap/v1/multi_faceswap'
         body = {
           source_image: data.source_image,
           face_image: data.face_image,
           index: data.index,
-          webhook: `${supabaseUrl}/functions/v1/aifaceswap-proxy`
+          webhook_url: webhook_url
         }
         break
       case 'check_status':
-        // Status checking is not available in AIFaceSwap.io API
-        // Return error for now
-        return new Response(
-          JSON.stringify({ error: 'Status check not supported by AIFaceSwap.io API' }),
-          { 
-            status: 400, 
-            headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
-          }
-        )
+      case 'query':
+        // Direct API query for task status
+        apiUrl = 'https://aifaceswap.io/api/aifaceswap/v1/query'
+        body = { task_id: data.task_id }
+        break
       default:
         return new Response(
           JSON.stringify({ error: 'Invalid action' }),
@@ -155,10 +155,10 @@ serve(async (req) => {
         )
     }
     
-    console.log('Making request to AIFaceSwap API:', url)
+    console.log('Making request to AIFaceSwap API:', apiUrl)
     console.log('Request body:', JSON.stringify(body, null, 2))
 
-    const aifaceswapResponse = await fetch(url, {
+    const aifaceswapResponse = await fetch(apiUrl, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${aifaceswapApiKey}`,
@@ -183,7 +183,7 @@ serve(async (req) => {
     // Handle different action responses
     if (action === 'faceswap' && responseData.code === 200 && responseData.data?.task_id) {
       // Save new faceswap task to database
-      console.log('Saving task to database:', responseData.data.task_id)
+      console.log('Saving faceswap task to database:', responseData.data.task_id)
       
       const { error: dbError } = await supabase
         .from('face_swap_tasks')
@@ -196,13 +196,32 @@ serve(async (req) => {
         })
 
       if (dbError) {
-        console.error('Failed to save task to database:', dbError)
+        console.error('Failed to save faceswap task to database:', dbError)
       } else {
-        console.log('Task saved to database successfully')
+        console.log('Faceswap task saved to database successfully')
+      }
+    } else if (action === 'multi_faceswap' && responseData.code === 200 && responseData.data?.task_id) {
+      // Save new multi_faceswap task to database
+      console.log('Saving multi_faceswap task to database:', responseData.data.task_id)
+      
+      const { error: dbError } = await supabase
+        .from('face_swap_tasks')
+        .insert({
+          task_id: responseData.data.task_id,
+          source_image: data.source_image,
+          face_image: Array.isArray(data.face_image) ? data.face_image : [data.face_image],
+          status: 'processing',
+          credits_used: responseData.data.points || 5
+        })
+
+      if (dbError) {
+        console.error('Failed to save multi_faceswap task to database:', dbError)
+      } else {
+        console.log('Multi_faceswap task saved to database successfully')
       }
     } else if (action === 'check_status' && responseData.code === 200) {
       // Update task status in database based on API response
-      const { task_id } = data
+      const task_id = data.task_id
       console.log('Checking status for task:', task_id)
       console.log('Status API response:', responseData)
       
@@ -235,13 +254,54 @@ serve(async (req) => {
             error_message: responseData.data.error || 'Task processing failed',
             updated_at: new Date().toISOString()
           })
-          .eq('task_id', task_id)
+          .eq('task_id', data.task_id)
 
         if (dbError) {
           console.error('Failed to update failed task in database:', dbError)
         } else {
           console.log('Task status updated to failed in database')
         }
+      }
+    } else if (action === 'query' && responseData?.code === 200 && responseData?.data) {
+      // Query response handling with DB sync
+      const st = responseData.data.status;
+      const taskId = data.task_id;
+      
+      console.log(`📊 Query response for ${taskId}: status=${st}`);
+      
+      if (st === 'completed' && responseData.data.result_image) {
+        console.log('🔄 Syncing completed task to both tables...');
+        
+        // Update face_swap_tasks table (legacy format - 'completed')
+        await supabase.from('face_swap_tasks').update({
+          status: 'completed',
+          result_image: responseData.data.result_image,
+          updated_at: new Date().toISOString()
+        }).eq('task_id', taskId);
+
+        // Update tasks table (new format - 'succeeded' for client compatibility)
+        await supabase.from('tasks').update({
+          status: 'succeeded',
+          result_image: responseData.data.result_image,
+          updated_at: new Date().toISOString()
+        }).eq('task_id', taskId);
+        
+      } else if (st === 'failed') {
+        console.log('🔄 Syncing failed task to both tables...');
+        
+        // Update face_swap_tasks table
+        await supabase.from('face_swap_tasks').update({
+          status: 'failed',
+          error_message: responseData.data?.error || 'Processing failed',
+          updated_at: new Date().toISOString()
+        }).eq('task_id', taskId);
+
+        // Update tasks table
+        await supabase.from('tasks').update({
+          status: 'failed',
+          error: responseData.data?.error || 'Processing failed',
+          updated_at: new Date().toISOString()
+        }).eq('task_id', taskId);
       }
     }
 

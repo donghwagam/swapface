@@ -55,3 +55,6 @@ enabled = false
 
 [functions.aifaceswap-proxy]
 verify_jwt = false
+
+[functions.aifaceswap-webhook]
+verify_jwt = false
