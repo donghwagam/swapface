@@ -129,7 +129,7 @@ export class FaceSwapAPIService {
       
       // Query database for webhook-updated task
       const { data: task, error } = await supabase
-        .from('face_swap_tasks')
+        .from('tasks')
         .select('*')
         .eq('task_id', taskId)
         .single();
@@ -152,9 +152,9 @@ export class FaceSwapAPIService {
         source_image: task.source_image,
         face_image: task.face_image,
         result_image: task.result_image,
-        provider: 'aifaceswap',
+        provider: task.provider || 'aifaceswap',
         credits_used: task.credits_used || 2,
-        error: task.error_message,
+        error: task.error,
         created_at: task.created_at,
         updated_at: task.updated_at || task.created_at
       };

@@ -43,7 +43,7 @@ export class TaskPollingService {
         
         // First check database
         const { data, error } = await supabase
-          .from('face_swap_tasks')
+          .from('tasks')
           .select('*')
           .eq('task_id', taskId)
           .single();
@@ -63,17 +63,17 @@ export class TaskPollingService {
         }
 
         console.log('📊 DB Task status:', data.status, data);
-        onUpdate(data);
+        onUpdate(data as any);
 
         // Check if task is complete from database
-        if (data.status === 'completed') {
+        if (data.status === 'succeeded' && data.result_image) {
           console.log('✅ Task completed successfully from database');
-          onComplete(data);
+          onComplete(data as any);
           this.stopPolling(taskId);
           return;
         } else if (data.status === 'failed') {
-          console.log('❌ Task failed from database:', data.error_message);
-          onError(data.error_message || 'Task processing failed');
+          console.log('❌ Task failed from database:', data.error);
+          onError(data.error || 'Task processing failed');
           this.stopPolling(taskId);
           return;
         }
@@ -91,14 +91,14 @@ export class TaskPollingService {
               const apiData = apiResponse.data;
               
               // If API shows task is done but webhook didn't fire
-              if (apiData.status === 'success' && apiData.result_image) {
+              if ((apiData.status === 'completed' || apiData.status === 'succeeded') && apiData.result_image) {
                 console.log('✅ Task completed per API, updating database...');
                 
                 // Update database directly since webhook failed
                 const { error: updateError } = await supabase
-                  .from('face_swap_tasks')
+                  .from('tasks')
                   .update({
-                    status: 'completed',
+                    status: 'succeeded',
                     result_image: apiData.result_image,
                     updated_at: new Date().toISOString()
                   })
@@ -114,10 +114,10 @@ export class TaskPollingService {
                 console.log('❌ Task failed per API, updating database...');
                 
                 const { error: updateError } = await supabase
-                  .from('face_swap_tasks')
+                  .from('tasks')
                   .update({
                     status: 'failed',
-                    error_message: apiData.message || 'Processing failed',
+                    error: apiData.message || 'Processing failed',
                     updated_at: new Date().toISOString()
                   })
                   .eq('task_id', taskId);
@@ -191,7 +191,7 @@ export class TaskPollingService {
   async getTaskStatus(taskId: string): Promise<FaceSwapTask | null> {
     try {
       const { data, error } = await supabase
-        .from('face_swap_tasks')
+        .from('tasks')
         .select('*')
         .eq('task_id', taskId)
         .single();
@@ -214,7 +214,7 @@ export class TaskPollingService {
   async getAllTasks(): Promise<FaceSwapTask[]> {
     try {
       const { data, error } = await supabase
-        .from('face_swap_tasks')
+        .from('tasks')
         .select('*')
         .order('created_at', { ascending: false })
         .limit(10);
