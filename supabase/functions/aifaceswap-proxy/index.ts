@@ -198,7 +198,23 @@ serve(async (req) => {
         })
 
       if (dbError) {
-        console.error('Failed to save faceswap task to database:', dbError)
+        console.error('Failed to save faceswap task to database (with task_type):', dbError)
+        console.log('Retrying insert without new columns...')
+        const { error: fallbackError } = await supabase
+          .from('tasks')
+          .insert({
+            task_id: responseData.data.task_id,
+            source_image: data.source_image,
+            face_image: data.face_image,
+            status: 'processing',
+            credits_used: responseData.data.points || 2,
+            provider: 'aifaceswap'
+          })
+        if (fallbackError) {
+          console.error('Fallback insert also failed:', fallbackError)
+        } else {
+          console.log('Faceswap task saved to database successfully (fallback)')
+        }
       } else {
         console.log('Faceswap task saved to database successfully')
       }
@@ -219,7 +235,23 @@ serve(async (req) => {
         })
 
       if (dbError) {
-        console.error('Failed to save multi_faceswap task to database:', dbError)
+        console.error('Failed to save multi_faceswap task to database (with face_images/task_type):', dbError)
+        console.log('Retrying insert without new columns...')
+        const { error: fallbackError } = await supabase
+          .from('tasks')
+          .insert({
+            task_id: responseData.data.task_id,
+            source_image: data.source_image,
+            face_image: (Array.isArray(data.face_image) ? data.face_image[0] : data.face_image),
+            status: 'processing',
+            credits_used: responseData.data.points || 5,
+            provider: 'aifaceswap'
+          })
+        if (fallbackError) {
+          console.error('Fallback insert also failed:', fallbackError)
+        } else {
+          console.log('Multi_faceswap task saved to database successfully (fallback)')
+        }
       } else {
         console.log('Multi_faceswap task saved to database successfully')
       }
