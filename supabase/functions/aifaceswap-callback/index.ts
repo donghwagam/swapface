@@ -49,8 +49,8 @@ serve(async (req) => {
     
     console.log(`🔄 Updating task ${task_id} with status: ${status}`);
     
-    // Use direct REST API call with service_role for reliable upsert
-    const supabaseResponse = await fetch(`${supabaseUrl}/rest/v1/face_swap_tasks`, {
+    // Use direct REST API call with service_role for reliable upsert to tasks table
+    const supabaseResponse = await fetch(`${supabaseUrl}/rest/v1/tasks`, {
       method: "POST",
       headers: {
         apikey: supabaseServiceKey,
@@ -62,7 +62,6 @@ serve(async (req) => {
         task_id: task_id,
         status: status,
         result_image: result_image || null,
-        type: type || 2, // 1: single, 2: multi
         updated_at: new Date().toISOString(),
         created_at: new Date().toISOString(),
       }),
