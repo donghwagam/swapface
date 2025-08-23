@@ -113,7 +113,7 @@ serve(async (req) => {
     const webhook_url = `${url.origin}/functions/v1/aifaceswap-webhook`
 
     let apiUrl = ''
-    let body = null
+    let body: any = null
 
     switch (action) {
       case 'faceswap':
@@ -126,10 +126,39 @@ serve(async (req) => {
         break
       case 'extract_face':
         apiUrl = 'https://aifaceswap.io/api/aifaceswap/v1/extract_face'
-        body = {
-          img: data.img
+        // Early return with multipart/form-data (provider expects a file)
+        try {
+          const imgUrl = String(data.img || '')
+          if (!imgUrl) {
+            return new Response(JSON.stringify({ error: 'Missing img parameter' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
+          }
+          console.log('Fetching image for extract_face:', imgUrl)
+          const imgResp = await fetch(imgUrl)
+          if (!imgResp.ok) {
+            console.error('Failed to fetch image from URL:', imgResp.status, imgResp.statusText)
+            return new Response(JSON.stringify({ error: 'Failed to fetch image from URL' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
+          }
+          const imgBlob = await imgResp.blob()
+          const form = new FormData()
+          form.append('img', imgBlob, 'image.jpg')
+
+          const extractResp = await fetch(apiUrl, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${aifaceswapApiKey}`
+            },
+            body: form
+          })
+
+          const text = await extractResp.text()
+          let json: any
+          try { json = JSON.parse(text) } catch (_) { json = { error: 'Invalid response from AIFaceSwap API', rawResponse: text } }
+
+          return new Response(JSON.stringify(json), { status: extractResp.status, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
+        } catch (e) {
+          console.error('extract_face multipart flow failed:', e)
+          return new Response(JSON.stringify({ error: 'extract_face failed', details: String(e) }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
         }
-        break
       case 'multi_faceswap':
         apiUrl = 'https://aifaceswap.io/api/aifaceswap/v1/multi_faceswap'
         body = {
@@ -336,7 +365,7 @@ serve(async (req) => {
     console.error('AIFaceSwap proxy error:', error)
     
     return new Response(
-      JSON.stringify({ error: 'Internal server error', details: error.message }),
+      JSON.stringify({ error: 'Internal server error', details: (error as Error).message }),
       { 
         status: 500, 
         headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
