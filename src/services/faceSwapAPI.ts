@@ -124,12 +124,10 @@ export class FaceSwapAPIService {
     try {
       console.log('📊 Checking task status:', taskId);
 
-      // Import supabase client for direct DB access
       const { supabase } = await import('./supabase');
       
-      // Query database for webhook-updated task
       const { data: task, error } = await supabase
-        .from('face_swap_tasks')
+        .from('tasks')
         .select('*')
         .eq('task_id', taskId)
         .single();
@@ -144,17 +142,18 @@ export class FaceSwapAPIService {
 
       console.log('📈 Found task in database:', task);
       
-      // Convert database format to Task interface
+      const normalizedStatus = task.status === 'completed' ? 'succeeded' : task.status;
+
       const taskResponse: Task = {
         id: task.id || taskId,
         task_id: task.task_id,
-        status: task.status === 'completed' ? 'succeeded' : task.status || 'processing',
+        status: normalizedStatus,
         source_image: task.source_image,
         face_image: task.face_image,
         result_image: task.result_image,
-        provider: 'aifaceswap',
+        provider: task.provider || 'aifaceswap',
         credits_used: task.credits_used || 2,
-        error: task.error_message,
+        error: task.error,
         created_at: task.created_at,
         updated_at: task.updated_at || task.created_at
       };
