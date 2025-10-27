@@ -122,45 +122,45 @@ export class FaceSwapAPIService {
    */
   async getTaskStatus(taskId: string): Promise<TaskStatusResponse> {
     try {
-      console.log('📊 Checking task status:', taskId);
+      console.log('📊 Checking task status via function:', taskId);
 
-      // Import supabase client for direct DB access
-      const { supabase } = await import('./supabase');
-      
-      // Query database for webhook-updated task
-      const { data: task, error } = await supabase
-        .from('face_swap_tasks')
-        .select('*')
-        .eq('task_id', taskId)
-        .single();
-      
-      if (error || !task) {
-        console.log('📈 Task not found in database');
-        return {
-          ok: false,
-          error: 'Task not found'
-        };
+      const response = await fetch(`${SUPABASE_URL}/functions/v1/task-status/${taskId}`, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      if (!response.ok) {
+        const text = await response.text();
+        console.warn('⚠️ task-status function returned non-200:', response.status, text);
+        return { ok: false, error: `Function error: ${response.status}` };
       }
 
-      console.log('📈 Found task in database:', task);
-      
-      // Convert database format to Task interface
+      const data = await response.json();
+      if (!data.ok || !data.task) {
+        return { ok: false, error: 'Task not found' };
+      }
+
+      // Normalize to Task interface
+      const t = data.task;
       const taskResponse: Task = {
-        id: task.id || taskId,
-        task_id: task.task_id,
-        status: task.status === 'completed' ? 'succeeded' : task.status || 'processing',
-        source_image: task.source_image,
-        face_image: task.face_image,
-        result_image: task.result_image,
-        provider: 'aifaceswap',
-        credits_used: task.credits_used || 2,
-        error: task.error_message,
-        created_at: task.created_at,
-        updated_at: task.updated_at || task.created_at
+        id: t.id || taskId,
+        task_id: t.task_id || taskId,
+        status: t.status === 'completed' ? 'succeeded' : t.status || 'processing',
+        source_image: t.source_image,
+        face_image: t.face_image,
+        result_image: t.result_image,
+        provider: t.provider || 'aifaceswap',
+        credits_used: t.credits_used || 2,
+        error: t.error,
+        created_at: t.created_at,
+        updated_at: t.updated_at || t.created_at
       };
-      
+
       return { ok: true, task: taskResponse };
-      
+
     } catch (error) {
       console.error('💥 Task status check error:', error);
       return {

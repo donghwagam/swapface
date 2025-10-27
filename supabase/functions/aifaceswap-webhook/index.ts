@@ -86,70 +86,39 @@ serve(async (req) => {
     const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
-    console.log("📝 Preparing update data for both tables...");
+    console.log("📝 Preparing update data for tasks table...");
 
-    const common = {
-      updated_at: new Date().toISOString(),
-      ...(result_image ? { result_image } : {})
-    };
-
-    // face_swap_tasks table update (legacy - uses 'completed')
-    const updateFaceSwapTasks = {
-      ...common,
-      status: (success === 1 && result_image) ? 'completed' : 'failed',
-      ...(success === 1 && !result_image ? { error_message: 'No result image provided' } : {}),
-      ...(success === 0 ? { error_message: 'Provider reported failure (success=0)' } : {})
-    };
-
-    // tasks table update (new - uses 'succeeded' for client compatibility)
     const updateTasks = {
-      ...common,
-      status: (success === 1 && result_image) ? 'succeeded' : 'failed', // Client expects 'succeeded'
+      updated_at: new Date().toISOString(),
+      ...(result_image ? { result_image } : {}),
+      status: (success === 1 && result_image) ? 'succeeded' : 'failed',
       ...(success === 1 && !result_image ? { error: 'No result image provided' } : {}),
       ...(success === 0 ? { error: 'Provider reported failure (success=0)' } : {})
     };
 
-    // 1) Try face_swap_tasks first
-    let { data: fsRows, error: fsErr } = await supabase
-      .from('face_swap_tasks')
-      .update(updateFaceSwapTasks)
+    const { data: tRows, error: tErr } = await supabase
+      .from('tasks')
+      .update(updateTasks)
       .eq('task_id', task_id)
       .select();
 
-    if (fsErr) {
-      console.error('face_swap_tasks update error:', fsErr);
+    if (tErr) {
+      console.error('tasks update error:', tErr);
+      return new Response(JSON.stringify({ ok: false, error: 'Database update failed' }), {
+        status: 500,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      });
     }
 
-    // 2) If no rows in face_swap_tasks, try tasks table
-    if (!fsRows || fsRows.length === 0) {
-      console.log('No rows in face_swap_tasks, trying tasks table...');
-      
-      const { data: tRows, error: tErr } = await supabase
-        .from('tasks')
-        .update(updateTasks)
-        .eq('task_id', task_id)
-        .select();
-
-      if (tErr) {
-        console.error('tasks update error:', tErr);
-        return new Response(JSON.stringify({ ok: false, error: 'Database update failed' }), {
-          status: 500,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-        });
-      }
-
-      if (!tRows || tRows.length === 0) {
-        console.error('No task found in either table for task_id:', task_id);
-        return new Response(JSON.stringify({ ok: false, error: 'Task not found', task_id }), {
-          status: 404,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-        });
-      }
-
-      console.log('✅ Updated tasks table:', { task_id, status: updateTasks.status, has_result: !!updateTasks.result_image });
-    } else {
-      console.log('✅ Updated face_swap_tasks table:', { task_id, status: updateFaceSwapTasks.status, has_result: !!updateFaceSwapTasks.result_image });
+    if (!tRows || tRows.length === 0) {
+      console.error('No task found in tasks for task_id:', task_id);
+      return new Response(JSON.stringify({ ok: false, error: 'Task not found', task_id }), {
+        status: 404,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      });
     }
+
+    console.log('✅ Updated tasks table:', { task_id, status: updateTasks.status, has_result: !!updateTasks.result_image });
 
     return new Response(JSON.stringify({ 
       ok: true, 
